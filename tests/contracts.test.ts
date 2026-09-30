@@ -1,6 +1,8 @@
 import {
   createFeedbackSchema,
   fieldLimits,
+  isValidStatusTransition,
+  nextFeedbackStatus,
   voteRequestSchema,
 } from "../src/shared/contracts.js";
 
@@ -48,5 +50,37 @@ describe("feedback contracts", () => {
     expect(voteRequestSchema.safeParse({ clientId: "not/valid" }).success).toBe(
       false,
     );
+  });
+});
+
+describe("feedback status transitions", () => {
+  it("returns the single next status in sequence", () => {
+    expect(nextFeedbackStatus("new")).toBe("planned");
+    expect(nextFeedbackStatus("planned")).toBe("done");
+    expect(nextFeedbackStatus("done")).toBeUndefined();
+  });
+
+  it("accepts only the single forward transition", () => {
+    expect(isValidStatusTransition("new", "planned")).toBe(true);
+    expect(isValidStatusTransition("planned", "done")).toBe(true);
+  });
+
+  it("rejects skipping a state", () => {
+    expect(isValidStatusTransition("new", "done")).toBe(false);
+  });
+
+  it("rejects reversing to an earlier state", () => {
+    expect(isValidStatusTransition("done", "planned")).toBe(false);
+    expect(isValidStatusTransition("planned", "new")).toBe(false);
+  });
+
+  it("rejects resubmitting the current state", () => {
+    expect(isValidStatusTransition("new", "new")).toBe(false);
+    expect(isValidStatusTransition("planned", "planned")).toBe(false);
+  });
+
+  it("rejects any change from the terminal done state", () => {
+    expect(isValidStatusTransition("done", "done")).toBe(false);
+    expect(isValidStatusTransition("done", "new")).toBe(false);
   });
 });

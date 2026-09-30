@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type FormEvent } from "react";
 import {
   feedbackCategories,
   fieldLimits,
+  nextFeedbackStatus,
   type CreateFeedbackRequest,
   type Feedback,
 } from "../shared/contracts.js";
@@ -9,6 +10,7 @@ import {
   ApiRequestError,
   createFeedback,
   listFeedback,
+  updateFeedbackStatus,
   voteForFeedback,
 } from "./api.js";
 
@@ -17,6 +19,12 @@ const emptyForm: CreateFeedbackRequest = {
   description: "",
   category: "content",
   displayName: "",
+};
+
+const statusLabels: Record<Feedback["status"], string> = {
+  new: "New",
+  planned: "Planned",
+  done: "Done",
 };
 
 const getClientId = (): string => {
@@ -35,6 +43,7 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [votingId, setVotingId] = useState<string>();
+  const [advancingId, setAdvancingId] = useState<string>();
   const [error, setError] = useState<string>();
   const [loadFailed, setLoadFailed] = useState(false);
   const [notice, setNotice] = useState<string>();
@@ -99,6 +108,27 @@ export function App() {
       setError(messageFor(voteError));
     } finally {
       setVotingId(undefined);
+    }
+  }
+
+  async function advanceStatus(item: Feedback) {
+    const next = nextFeedbackStatus(item.status);
+    if (!next) return;
+    setAdvancingId(item.id);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      const feedback = await updateFeedbackStatus(item.id, next);
+      setItems((current) =>
+        current.map((candidate) =>
+          candidate.id === item.id ? feedback : candidate,
+        ),
+      );
+      setNotice(`“${item.title}” moved to ${statusLabels[next]}.`);
+    } catch (statusError) {
+      setError(messageFor(statusError));
+    } finally {
+      setAdvancingId(undefined);
     }
   }
 
@@ -208,9 +238,14 @@ export function App() {
               {items.map((item) => (
                 <li className="feedback-card" key={item.id}>
                   <div className="card-topline">
-                    <span className={`category category-${item.category}`}>
-                      {item.category}
-                    </span>
+                    <div className="topline-badges">
+                      <span className={`category category-${item.category}`}>
+                        {item.category}
+                      </span>
+                      <span className={`status status-${item.status}`}>
+                        {statusLabels[item.status]}
+                      </span>
+                    </div>
                     <time dateTime={item.createdAt}>
                       {new Intl.DateTimeFormat(undefined, {
                         dateStyle: "medium",
@@ -221,16 +256,31 @@ export function App() {
                   <p>{item.description}</p>
                   <div className="card-footer">
                     <span>By {item.displayName}</span>
-                    <button
-                      className="vote"
-                      type="button"
-                      disabled={votingId === item.id}
-                      aria-label={`Vote for ${item.title}. ${item.votes} votes`}
-                      onClick={() => void vote(item)}
-                    >
-                      <span aria-hidden="true">▲</span>
-                      {votingId === item.id ? "Voting…" : item.votes}
-                    </button>
+                    <div className="card-actions">
+                      {nextFeedbackStatus(item.status) && (
+                        <button
+                          className="status-advance"
+                          type="button"
+                          disabled={advancingId === item.id}
+                          aria-label={`Move “${item.title}” from ${statusLabels[item.status]} to ${statusLabels[nextFeedbackStatus(item.status)!]}`}
+                          onClick={() => void advanceStatus(item)}
+                        >
+                          {advancingId === item.id
+                            ? "Updating…"
+                            : `Move to ${statusLabels[nextFeedbackStatus(item.status)!]}`}
+                        </button>
+                      )}
+                      <button
+                        className="vote"
+                        type="button"
+                        disabled={votingId === item.id}
+                        aria-label={`Vote for ${item.title}. ${item.votes} votes`}
+                        onClick={() => void vote(item)}
+                      >
+                        <span aria-hidden="true">▲</span>
+                        {votingId === item.id ? "Voting…" : item.votes}
+                      </button>
+                    </div>
                   </div>
                 </li>
               ))}

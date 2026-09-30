@@ -249,6 +249,50 @@ form > button {
   text-transform: capitalize;
 }
 
+.topline-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.status {
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.73rem;
+  font-weight: 800;
+}
+
+.status-new {
+  color: #475467;
+  background: #f2f4f7;
+}
+
+.status-planned {
+  color: #b54708;
+  background: #fffaeb;
+}
+
+.status-done {
+  color: #067647;
+  background: #ecfdf3;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status-advance {
+  color: #175cd3;
+  background: #eff8ff;
+  border: 1px solid #b2ddff;
+  border-radius: 999px;
+  padding: 0.42rem 0.7rem;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
 .category-content {
   color: #175cd3;
   background: #eff8ff;

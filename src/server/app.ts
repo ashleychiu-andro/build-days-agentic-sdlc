@@ -7,14 +7,17 @@ import { rateLimit } from "express-rate-limit";
 import { ZodError, type ZodType } from "zod";
 import {
   createFeedbackSchema,
+  updateStatusSchema,
   voteRequestSchema,
   type ApiError,
   type CreateFeedbackRequest,
+  type UpdateStatusRequest,
   type VoteRequest,
 } from "../shared/contracts.js";
 import { logger as defaultLogger, type Logger } from "./logger.js";
 import {
   FeedbackNotFoundError,
+  InvalidTransitionError,
   type FeedbackStorage,
 } from "./storage.js";
 
@@ -117,6 +120,23 @@ export const createApp = ({
     },
   );
 
+  app.patch(
+    "/api/feedback/:id/status",
+    validateBody(updateStatusSchema),
+    async (request, response) => {
+      const id = request.params.id;
+      if (typeof id !== "string") {
+        response.status(404).json({
+          error: { code: "NOT_FOUND", message: "Feedback was not found." },
+        } satisfies ApiError);
+        return;
+      }
+      const { status } = request.body as UpdateStatusRequest;
+      const feedback = await storage.updateStatus(id, status);
+      response.json({ feedback });
+    },
+  );
+
   if (staticDirectory) {
     app.use(express.static(staticDirectory));
     app.get("*splat", (_request, response) => {
@@ -128,6 +148,12 @@ export const createApp = ({
     if (error instanceof FeedbackNotFoundError) {
       response.status(404).json({
         error: { code: "NOT_FOUND", message: "Feedback was not found." },
+      } satisfies ApiError);
+      return;
+    }
+    if (error instanceof InvalidTransitionError) {
+      response.status(409).json({
+        error: { code: "INVALID_TRANSITION", message: error.message },
       } satisfies ApiError);
       return;
     }

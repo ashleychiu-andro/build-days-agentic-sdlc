@@ -6,25 +6,36 @@ import {
   type TransactionAction,
 } from "@azure/data-tables";
 import { DefaultAzureCredential } from "@azure/identity";
-import type {
-  CreateFeedbackRequest,
-  Feedback,
-  VoteResult,
+import {
+  isValidStatusTransition,
+  type CreateFeedbackRequest,
+  type Feedback,
+  type FeedbackStatus,
+  type VoteResult,
 } from "../shared/contracts.js";
 
 export class FeedbackNotFoundError extends Error {}
+
+/**
+ * Thrown when a requested status is not the single valid next state after
+ * the feedback's current status (skip, reverse, resubmit, or any change from
+ * a terminal `done` status).
+ */
+export class InvalidTransitionError extends Error {}
 
 export interface FeedbackStorage {
   initialize(): Promise<void>;
   list(): Promise<Feedback[]>;
   create(input: CreateFeedbackRequest, options?: CreateOptions): Promise<Feedback>;
   vote(feedbackId: string, clientId: string): Promise<VoteResult>;
+  updateStatus(feedbackId: string, status: FeedbackStatus): Promise<Feedback>;
   checkHealth(): Promise<void>;
 }
 
 interface CreateOptions {
   id?: string;
   createdAt?: string;
+  status?: FeedbackStatus;
 }
 
 interface FeedbackEntity extends TableEntity {
@@ -33,6 +44,7 @@ interface FeedbackEntity extends TableEntity {
   category: Feedback["category"];
   displayName: string;
   votes: number;
+  status: FeedbackStatus;
   createdAt: string;
 }
 
@@ -43,6 +55,7 @@ const toFeedback = (entity: FeedbackEntity): Feedback => ({
   category: entity.category,
   displayName: entity.displayName,
   votes: entity.votes,
+  status: entity.status,
   createdAt: entity.createdAt,
 });
 
@@ -68,6 +81,7 @@ export class InMemoryFeedbackStorage implements FeedbackStorage {
       id: options.id ?? randomUUID(),
       ...input,
       votes: 0,
+      status: options.status ?? "new",
       createdAt: options.createdAt ?? new Date().toISOString(),
     };
     if (this.feedback.has(item.id)) {
@@ -92,6 +106,25 @@ export class InMemoryFeedbackStorage implements FeedbackStorage {
     const updated = { ...feedback, votes: feedback.votes + 1 };
     this.feedback.set(feedbackId, updated);
     return Promise.resolve({ feedback: updated, alreadyVoted: false });
+  }
+
+  updateStatus(feedbackId: string, status: FeedbackStatus): Promise<Feedback> {
+    const feedback = this.feedback.get(feedbackId);
+    if (!feedback) {
+      return Promise.reject(
+        new FeedbackNotFoundError(`Feedback ${feedbackId} was not found.`),
+      );
+    }
+    if (!isValidStatusTransition(feedback.status, status)) {
+      return Promise.reject(
+        new InvalidTransitionError(
+          `Cannot move feedback ${feedbackId} from ${feedback.status} to ${status}.`,
+        ),
+      );
+    }
+    const updated = { ...feedback, status };
+    this.feedback.set(feedbackId, updated);
+    return Promise.resolve(updated);
   }
 
   async checkHealth(): Promise<void> {
@@ -144,6 +177,7 @@ export class AzureTableFeedbackStorage implements FeedbackStorage {
       id: options.id ?? randomUUID(),
       ...input,
       votes: 0,
+      status: options.status ?? "new",
       createdAt: options.createdAt ?? new Date().toISOString(),
     };
     await this.table.createEntity<FeedbackEntity>({
@@ -151,6 +185,7 @@ export class AzureTableFeedbackStorage implements FeedbackStorage {
       rowKey: "feedback",
       ...input,
       votes: item.votes,
+      status: item.status,
       createdAt: item.createdAt,
     });
     return item;
@@ -201,6 +236,45 @@ export class AzureTableFeedbackStorage implements FeedbackStorage {
       }
     }
     throw new Error("Unable to record vote.");
+  }
+
+  async updateStatus(
+    feedbackId: string,
+    status: FeedbackStatus,
+  ): Promise<Feedback> {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      let entity: FeedbackEntity;
+      try {
+        entity = await this.table.getEntity<FeedbackEntity>(
+          feedbackId,
+          "feedback",
+        );
+      } catch (error) {
+        if (isStatus(error, 404)) {
+          throw new FeedbackNotFoundError(
+            `Feedback ${feedbackId} was not found.`,
+          );
+        }
+        throw error;
+      }
+
+      if (!isValidStatusTransition(entity.status, status)) {
+        throw new InvalidTransitionError(
+          `Cannot move feedback ${feedbackId} from ${entity.status} to ${status}.`,
+        );
+      }
+
+      const updated: FeedbackEntity = { ...entity, status };
+      try {
+        await this.table.updateEntity<FeedbackEntity>(updated, "Replace");
+        return toFeedback(updated);
+      } catch (error) {
+        if (!isStatus(error, 412) || attempt === 3) {
+          throw error;
+        }
+      }
+    }
+    throw new Error("Unable to update feedback status.");
   }
 
   async checkHealth(): Promise<void> {

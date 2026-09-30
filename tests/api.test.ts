@@ -69,6 +69,133 @@ describe("feedback API", () => {
     const list = await request(app).get("/api/feedback").expect(200);
     expect(list.body.items).toHaveLength(1);
     expect(list.body.items[0].votes).toBe(1);
+    expect(list.body.items[0].status).toBe("new");
+  });
+
+  it("advances feedback status through valid transitions", async () => {
+    const app = createApp({
+      storage: new InMemoryFeedbackStorage(),
+      logger: silentLogger,
+    });
+    const created = await request(app)
+      .post("/api/feedback")
+      .send({
+        title: "Add a break",
+        description: "A short break would help.",
+        category: "facilitation",
+        displayName: "Lin",
+      })
+      .expect(201);
+    const id = created.body.feedback.id as string;
+    expect(created.body.feedback.status).toBe("new");
+
+    const planned = await request(app)
+      .patch(`/api/feedback/${id}/status`)
+      .send({ status: "planned" })
+      .expect(200);
+    expect(planned.body.feedback.status).toBe("planned");
+
+    const list = await request(app).get("/api/feedback").expect(200);
+    expect(list.body.items[0].status).toBe("planned");
+  });
+
+  it("rejects an invalid status transition without changing the stored status", async () => {
+    const app = createApp({
+      storage: new InMemoryFeedbackStorage(),
+      logger: silentLogger,
+    });
+    const created = await request(app)
+      .post("/api/feedback")
+      .send({
+        title: "Add a break",
+        description: "A short break would help.",
+        category: "facilitation",
+        displayName: "Lin",
+      })
+      .expect(201);
+    const id = created.body.feedback.id as string;
+
+    const response = await request(app)
+      .patch(`/api/feedback/${id}/status`)
+      .send({ status: "done" })
+      .expect(409);
+    expect(response.body.error.code).toBe("INVALID_TRANSITION");
+
+    const list = await request(app).get("/api/feedback").expect(200);
+    expect(list.body.items[0].status).toBe("new");
+  });
+
+  it("rejects any further status change once an item is done", async () => {
+    const app = createApp({
+      storage: new InMemoryFeedbackStorage(),
+      logger: silentLogger,
+    });
+    const created = await request(app)
+      .post("/api/feedback")
+      .send({
+        title: "Add a break",
+        description: "A short break would help.",
+        category: "facilitation",
+        displayName: "Lin",
+      })
+      .expect(201);
+    const id = created.body.feedback.id as string;
+    await request(app)
+      .patch(`/api/feedback/${id}/status`)
+      .send({ status: "planned" })
+      .expect(200);
+    await request(app)
+      .patch(`/api/feedback/${id}/status`)
+      .send({ status: "done" })
+      .expect(200);
+
+    const response = await request(app)
+      .patch(`/api/feedback/${id}/status`)
+      .send({ status: "done" })
+      .expect(409);
+    expect(response.body.error.code).toBe("INVALID_TRANSITION");
+
+    const list = await request(app).get("/api/feedback").expect(200);
+    expect(list.body.items[0].status).toBe("done");
+  });
+
+  it("returns actionable validation for a malformed status body without changing the stored status", async () => {
+    const app = createApp({
+      storage: new InMemoryFeedbackStorage(),
+      logger: silentLogger,
+    });
+    const created = await request(app)
+      .post("/api/feedback")
+      .send({
+        title: "Add a break",
+        description: "A short break would help.",
+        category: "facilitation",
+        displayName: "Lin",
+      })
+      .expect(201);
+    const id = created.body.feedback.id as string;
+
+    const response = await request(app)
+      .patch(`/api/feedback/${id}/status`)
+      .send({ status: "archived" })
+      .expect(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+
+    const list = await request(app).get("/api/feedback").expect(200);
+    expect(list.body.items[0].status).toBe("new");
+  });
+
+  it("returns a not-found response for status updates on missing feedback", async () => {
+    const app = createApp({
+      storage: new InMemoryFeedbackStorage(),
+      logger: silentLogger,
+    });
+    await request(app)
+      .patch("/api/feedback/missing/status")
+      .send({ status: "planned" })
+      .expect(404, {
+        error: { code: "NOT_FOUND", message: "Feedback was not found." },
+      });
   });
 
   it("returns actionable validation without persisting", async () => {
@@ -128,6 +255,7 @@ describe("feedback API", () => {
       list: () => Promise.reject(new Error("connection string was secret")),
       create: () => Promise.reject(new Error("unused")),
       vote: () => Promise.reject(new Error("unused")),
+      updateStatus: () => Promise.reject(new Error("unused")),
       checkHealth: () => Promise.resolve(),
     };
     const app = createApp({ storage, logger: silentLogger });
