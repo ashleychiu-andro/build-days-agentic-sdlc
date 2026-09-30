@@ -3,6 +3,7 @@ import {
   AzureTableFeedbackStorage,
   FeedbackNotFoundError,
   InMemoryFeedbackStorage,
+  InvalidTransitionError,
   seedStorage,
 } from "../src/server/storage.js";
 
@@ -59,6 +60,45 @@ describe("in-memory feedback storage", () => {
     await seedStorage(storage);
     await seedStorage(storage);
     expect(await storage.list()).toHaveLength(2);
+  });
+
+  it("creates new feedback with status new", async () => {
+    const storage = new InMemoryFeedbackStorage();
+    const feedback = await storage.create(input);
+    expect(feedback.status).toBe("new");
+  });
+
+  it("persists a valid forward status transition", async () => {
+    const storage = new InMemoryFeedbackStorage();
+    const feedback = await storage.create(input);
+    const updated = await storage.updateStatus(feedback.id, "planned");
+    expect(updated.status).toBe("planned");
+    expect((await storage.list())[0]?.status).toBe("planned");
+  });
+
+  it("rejects an invalid status transition without changing state", async () => {
+    const storage = new InMemoryFeedbackStorage();
+    const feedback = await storage.create(input);
+    await expect(storage.updateStatus(feedback.id, "done")).rejects.toBeInstanceOf(
+      InvalidTransitionError,
+    );
+    expect((await storage.list())[0]?.status).toBe("new");
+  });
+
+  it("rejects a status update for an unknown feedback identifier", async () => {
+    const storage = new InMemoryFeedbackStorage();
+    await expect(
+      storage.updateStatus("missing", "planned"),
+    ).rejects.toBeInstanceOf(FeedbackNotFoundError);
+  });
+
+  it("leaves vote count and dedup unaffected by a status update", async () => {
+    const storage = new InMemoryFeedbackStorage();
+    const feedback = await storage.create(input);
+    await storage.vote(feedback.id, "client-1");
+    await storage.updateStatus(feedback.id, "planned");
+    const duplicate = await storage.vote(feedback.id, "client-1");
+    expect(duplicate).toMatchObject({ alreadyVoted: true, feedback: { votes: 1 } });
   });
 });
 
@@ -118,5 +158,75 @@ describe("Azure Table feedback storage", () => {
       alreadyVoted: true,
       feedback: { votes: 2 },
     });
+  });
+
+  it("persists a valid status transition via updateEntity", async () => {
+    const table = {
+      getEntity: vi.fn().mockResolvedValue({
+        partitionKey: "feedback-1",
+        rowKey: "feedback",
+        title: input.title,
+        description: input.description,
+        category: input.category,
+        displayName: input.displayName,
+        votes: 2,
+        status: "new",
+        createdAt: "2025-01-01T00:00:00.000Z",
+        etag: "etag-1",
+      }),
+      updateEntity: vi.fn().mockResolvedValue({}),
+    };
+    const storage = new AzureTableFeedbackStorage(
+      table as unknown as TableClient,
+    );
+
+    const result = await storage.updateStatus("feedback-1", "planned");
+
+    expect(result.status).toBe("planned");
+    expect(table.updateEntity).toHaveBeenCalledOnce();
+    const [entity, mode] = table.updateEntity.mock.calls[0] ?? [];
+    expect(mode).toBe("Replace");
+    expect(entity).toMatchObject({ status: "planned" });
+  });
+
+  it("rejects an invalid Azure status transition without calling updateEntity", async () => {
+    const table = {
+      getEntity: vi.fn().mockResolvedValue({
+        partitionKey: "feedback-1",
+        rowKey: "feedback",
+        title: input.title,
+        description: input.description,
+        category: input.category,
+        displayName: input.displayName,
+        votes: 2,
+        status: "done",
+        createdAt: "2025-01-01T00:00:00.000Z",
+        etag: "etag-1",
+      }),
+      updateEntity: vi.fn(),
+    };
+    const storage = new AzureTableFeedbackStorage(
+      table as unknown as TableClient,
+    );
+
+    await expect(
+      storage.updateStatus("feedback-1", "planned"),
+    ).rejects.toBeInstanceOf(InvalidTransitionError);
+    expect(table.updateEntity).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing feedback identifier without calling updateEntity", async () => {
+    const table = {
+      getEntity: vi.fn().mockRejectedValue({ statusCode: 404 }),
+      updateEntity: vi.fn(),
+    };
+    const storage = new AzureTableFeedbackStorage(
+      table as unknown as TableClient,
+    );
+
+    await expect(
+      storage.updateStatus("missing", "planned"),
+    ).rejects.toBeInstanceOf(FeedbackNotFoundError);
+    expect(table.updateEntity).not.toHaveBeenCalled();
   });
 });

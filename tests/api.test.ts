@@ -128,6 +128,7 @@ describe("feedback API", () => {
       list: () => Promise.reject(new Error("connection string was secret")),
       create: () => Promise.reject(new Error("unused")),
       vote: () => Promise.reject(new Error("unused")),
+      updateStatus: () => Promise.reject(new Error("unused")),
       checkHealth: () => Promise.resolve(),
     };
     const app = createApp({ storage, logger: silentLogger });
