@@ -2,6 +2,7 @@ import type {
   ApiError,
   CreateFeedbackRequest,
   Feedback,
+  FeedbackStatus,
   VoteResult,
 } from "../shared/contracts.js";
 
@@ -56,3 +57,17 @@ export const voteForFeedback = (
     method: "POST",
     body: JSON.stringify({ clientId }),
   });
+
+export const updateFeedbackStatus = async (
+  id: string,
+  status: FeedbackStatus,
+): Promise<Feedback> => {
+  const result = await request<{ feedback: Feedback }>(
+    `/api/feedback/${encodeURIComponent(id)}/status`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    },
+  );
+  return result.feedback;
+};

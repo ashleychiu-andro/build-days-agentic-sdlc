@@ -35,9 +35,10 @@ describe("feedback board", () => {
           id: "feedback-1",
           ...(JSON.parse(String(options.body)) as Omit<
             Feedback,
-            "id" | "votes" | "createdAt"
+            "id" | "votes" | "createdAt" | "status"
           >),
           votes: 0,
+          status: "new",
           createdAt: "2025-01-01T00:00:00.000Z",
         };
         return jsonResponse({ feedback: item }, 201);
@@ -111,5 +112,101 @@ describe("feedback board", () => {
     expect(await screen.findByText("The board could not load.")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("heading", { name: "No feedback yet" })).toBeVisible();
+  });
+
+  const baseItem: Feedback = {
+    id: "feedback-1",
+    title: "Better examples",
+    description: "Show another API example.",
+    category: "tooling",
+    displayName: "Sam",
+    votes: 0,
+    status: "new",
+    createdAt: "2025-01-01T00:00:00.000Z",
+  };
+
+  it("renders a status badge and an advance control for a new item", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ items: [baseItem] }),
+    );
+    render(<App />);
+    expect(await screen.findByText("New")).toBeVisible();
+    expect(
+      screen.getByRole("button", {
+        name: "Move “Better examples” from New to Planned",
+      }),
+    ).toBeVisible();
+  });
+
+  it("hides the advance control once an item reaches done", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ items: [{ ...baseItem, status: "done" }] }),
+    );
+    render(<App />);
+    expect(await screen.findByText("Done")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /Move “Better examples”/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("advances status on click and shows a confirmation", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/feedback") {
+        return jsonResponse({ items: [baseItem] });
+      }
+      if (url.endsWith("/status")) {
+        return jsonResponse({
+          feedback: { ...baseItem, status: "planned" },
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    const advance = await screen.findByRole("button", {
+      name: "Move “Better examples” from New to Planned",
+    });
+    await user.click(advance);
+
+    expect(
+      await screen.findByText("“Better examples” moved to Planned."),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", {
+        name: "Move “Better examples” from Planned to Done",
+      }),
+    ).toBeVisible();
+  });
+
+  it("shows an error message when a status transition is rejected", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/feedback") {
+        return jsonResponse({ items: [baseItem] });
+      }
+      if (url.endsWith("/status")) {
+        return jsonResponse(
+          {
+            error: {
+              code: "INVALID_TRANSITION",
+              message: "That status change is not allowed.",
+            },
+          },
+          409,
+        );
+      }
+      return jsonResponse({}, 404);
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    const advance = await screen.findByRole("button", {
+      name: "Move “Better examples” from New to Planned",
+    });
+    await user.click(advance);
+
+    expect(
+      await screen.findByText("That status change is not allowed."),
+    ).toBeVisible();
   });
 });
